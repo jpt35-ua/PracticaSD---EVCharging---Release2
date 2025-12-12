@@ -1,24 +1,29 @@
 """
-EV_CP_E_kafka.py - CP Engine Kafka-based.
-- Escucha comandos de CENTRAL (topic_cp_commands)
-- Publica telemetría en topic_cp_data y estados en topic_cp_status
-- Incluye menú local para simular enchufe/desenchufe y fallos
+EV_CP_E.py - Engine del CP (Release 2)
+- Consume comandos cifrados desde CENTRAL.
+- Envía heartbeats y telemetría cifrada usando la clave simétrica obtenida tras la autenticación.
+- Comparte credenciales con el Monitor mediante archivos locales en config/credentials/.
 """
 
-import time
 import json
-import threading
-import yaml
 import os
+import threading
+import time
+from datetime import datetime
+
+import yaml
 from kafka import KafkaConsumer, KafkaProducer
 from kafka.errors import KafkaError, NoBrokersAvailable
-from datetime import datetime
+
+from Extras.credentials import CredentialStore
+from Extras.security import decrypt_payload, encrypt_payload
 from Extras.utils import resolve_broker
+
 try:
-    with open('config/config.yaml', 'r') as f:
+    with open("config/config.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 except FileNotFoundError:
-    with open("../config/config.yaml", "r") as f:
+    with open("../config/config.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
 BROKER = resolve_broker(config, "CP_ENGINE")
@@ -26,10 +31,11 @@ TOPIC_CP_COMMANDS = config["kafka"]["topic_cp_commands"]
 TOPIC_CP_DATA = config["kafka"]["topic_cp_data"]
 TOPIC_CP_STATUS = config["kafka"]["topic_cp_status"]
 
+
 class Engine:
     def __init__(self, cp_id):
-        self.cp_id = cp_id
-        self.cfg = config["cps"].get(cp_id, {})
+        self.cp_id = cp_id.upper()
+        self.cfg = config["cps"].get(self.cp_id, {})
         self.price = self.cfg.get("price_per_kwh", 0.25)
         self.heartbeat_interval = self.cfg.get("heartbeat_interval", 5)
         self.battery_capacity = config["simulation"].get("battery_capacity", 50.0)
@@ -44,25 +50,64 @@ class Engine:
         self.consumer = None
         self._kafka_lock = threading.Lock()
         self._stop = threading.Event()
+        self.cred_store = CredentialStore(config)
+        self.credentials = self.cred_store.load(self.cp_id)
+        self._cred_mtime = self.cred_store.mtime(self.cp_id)
+        self.symmetric_key = self.credentials.get("symmetric_key")
+        self._warn_no_key = False
         self._connect_kafka()
+        self._start_credential_watcher()
 
     def _connect_kafka(self):
-        # Centraliza la conexión y reintenta hasta que el broker esté disponible.
         with self._kafka_lock:
             while True:
                 try:
-                    self.producer = KafkaProducer(bootstrap_servers=BROKER, value_serializer=lambda v: json.dumps(v).encode("utf-8"))
-                    self.consumer = KafkaConsumer(TOPIC_CP_COMMANDS, bootstrap_servers=BROKER, value_deserializer=lambda v: json.loads(v.decode("utf-8")), group_id=f"cp_{self.cp_id}", auto_offset_reset="earliest", consumer_timeout_ms=1000)
+                    self.producer = KafkaProducer(
+                        bootstrap_servers=BROKER,
+                        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+                    )
+                    self.consumer = KafkaConsumer(
+                        TOPIC_CP_COMMANDS,
+                        bootstrap_servers=BROKER,
+                        value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+                        group_id=f"cp_{self.cp_id}",
+                        auto_offset_reset="earliest",
+                        consumer_timeout_ms=1000,
+                    )
                     break
                 except (KafkaError, NoBrokersAvailable) as e:
                     print(f"[{self.cp_id}] Error conectando a Kafka: {e}. Reintentando en 2s...")
                     time.sleep(2)
 
+    def _start_credential_watcher(self):
+        threading.Thread(target=self._credentials_watchdog, daemon=True).start()
+
+    def _credentials_watchdog(self):
+        while not self._stop.is_set():
+            data, mtime = self.cred_store.load_if_changed(self.cp_id, self._cred_mtime)
+            if data:
+                self._cred_mtime = mtime
+                self.credentials = data
+                new_key = data.get("symmetric_key")
+                if new_key and new_key != self.symmetric_key:
+                    self.symmetric_key = new_key
+                    self._warn_no_key = False
+                    print(f"[{self.cp_id}] Nueva clave simétrica cargada.")
+            time.sleep(4)
+
+    def wait_for_key(self):
+        while not self._stop.is_set() and not self.symmetric_key:
+            print(f"[{self.cp_id}] Esperando clave simétrica. Autentica el CP desde el Monitor...")
+            time.sleep(5)
+            data, mtime = self.cred_store.load_if_changed(self.cp_id, self._cred_mtime)
+            if data:
+                self._cred_mtime = mtime
+                self.credentials = data
+                self.symmetric_key = data.get("symmetric_key")
+
     def start(self):
-        # Register at central via sending REGISTER message
-        reg = {"type":"REGISTER", "cp_id": self.cp_id, "info": {"price": self.price}}
-        self.producer.send(TOPIC_CP_STATUS, reg); self.producer.flush()
-        # Start threads
+        self.wait_for_key()
+        self._publish_status({"type": "REGISTER", "cp_id": self.cp_id, "info": {"price": self.price}})
         threading.Thread(target=self.listen_commands, daemon=True).start()
         threading.Thread(target=self.heartbeat_loop, daemon=True).start()
         threading.Thread(target=self.console_loop, daemon=True).start()
@@ -75,21 +120,20 @@ class Engine:
         self._stop.set()
 
     def listen_commands(self):
-        while True:
+        while not self._stop.is_set():
             try:
                 for msg in self.consumer:
-                    data = msg.value
-                    # filter by cp_id if message targeted
-                    target = data.get("cp_id")
+                    payload = self._decode_command(msg.value)
+                    if not payload:
+                        continue
+                    target = payload.get("cp_id")
                     if target and target != self.cp_id:
                         continue
-                    mtype = data.get("type")
+                    mtype = payload.get("type")
                     if mtype == "START_CHARGE":
-                        driver_id = data.get("driver_id")
-                        self.start_charging(driver_id)
+                        self.start_charging(payload.get("driver_id"))
                     elif mtype == "CANCEL_CHARGE":
-                        if data.get("cp_id") and data.get("cp_id") == self.cp_id:
-                            self.cancel_charging()
+                        self.cancel_charging()
                     elif mtype == "STOP_CHARGE":
                         self.stop_charging()
                     elif mtype == "PAUSE_CHARGE":
@@ -104,11 +148,31 @@ class Engine:
                 print(f"[{self.cp_id}] Error inesperado en listen_commands: {e}")
                 time.sleep(1)
 
-    def heartbeat_loop(self):
-        while True:
+    def _decode_command(self, data):
+        if not isinstance(data, dict):
+            return None
+        if "ciphertext" in data:
+            if not self.symmetric_key:
+                return None
             try:
-                status = {"type":"HEARTBEAT", "cp_id": self.cp_id, "status": ("faulty" if self.is_faulty else "ok"), "timestamp": datetime.now().isoformat()}
-                self.producer.send(TOPIC_CP_STATUS, status); self.producer.flush()
+                payload = decrypt_payload(self.symmetric_key, data["ciphertext"])
+                payload.setdefault("cp_id", data.get("cp_id"))
+                return payload
+            except Exception as exc:
+                print(f"[{self.cp_id}] Error descifrando comando: {exc}")
+                return None
+        return data
+
+    def heartbeat_loop(self):
+        while not self._stop.is_set():
+            try:
+                status = {
+                    "type": "HEARTBEAT",
+                    "cp_id": self.cp_id,
+                    "status": ("faulty" if self.is_faulty else "ok"),
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+                self._publish_status(status)
                 time.sleep(self.heartbeat_interval)
             except (KafkaError, NoBrokersAvailable) as e:
                 print(f"[{self.cp_id}] Heartbeat no enviado: {e}. Reintentando conexión...")
@@ -117,6 +181,27 @@ class Engine:
             except Exception as e:
                 print(f"[{self.cp_id}] Heartbeat error: {e}")
                 time.sleep(2)
+
+    def _publish_status(self, payload):
+        payload.setdefault("cp_id", self.cp_id)
+        self._publish(payload, TOPIC_CP_STATUS)
+
+    def _publish_data(self, payload):
+        payload.setdefault("cp_id", self.cp_id)
+        self._publish(payload, TOPIC_CP_DATA)
+
+    def _publish(self, payload, topic):
+        if not self.symmetric_key:
+            if not self._warn_no_key:
+                print(f"[{self.cp_id}] Sin clave activa. Mensaje descartado.")
+                self._warn_no_key = True
+            return
+        try:
+            message = {"cp_id": self.cp_id, "ciphertext": encrypt_payload(self.symmetric_key, payload)}
+            self.producer.send(topic, message)
+            self.producer.flush()
+        except Exception as exc:
+            print(f"[{self.cp_id}] Error enviando mensaje cifrado: {exc}")
 
     def start_charging(self, driver_id):
         if self.is_faulty:
@@ -129,14 +214,14 @@ class Engine:
         self.is_charging = True
         self.total_energy = 0.0
         self.total_cost = 0.0
-        self.session_start = datetime.now()
+        self.session_start = datetime.utcnow()
         threading.Thread(target=self.charging_loop, daemon=True).start()
 
     def charging_loop(self):
         charge_duration = config["simulation"].get("charge_duration", 120)
         interval = config["simulation"].get("charge_interval", 1)
         energy_per_sec = self.battery_capacity / charge_duration
-        while self.is_charging:
+        while self.is_charging and not self._stop.is_set():
             if self.is_faulty:
                 self.stop_charging()
                 break
@@ -147,14 +232,26 @@ class Engine:
             cost_inc = energy_inc * self.price
             self.total_energy += energy_inc
             self.total_cost += cost_inc
-            duration = int((datetime.now() - self.session_start).total_seconds())
-            # send telemetry
-            data = {"type":"CHARGE_DATA","cp_id": self.cp_id, "driver_id": self.current_driver, "energy": round(self.total_energy,3), "cost": round(self.total_cost,2), "duration": duration, "timestamp": datetime.now().isoformat()}
-            self.producer.send(TOPIC_CP_DATA, data); self.producer.flush()
+            duration = int((datetime.utcnow() - self.session_start).total_seconds())
+            data = {
+                "type": "CHARGE_DATA",
+                "cp_id": self.cp_id,
+                "driver_id": self.current_driver,
+                "energy": round(self.total_energy, 3),
+                "cost": round(self.total_cost, 2),
+                "duration": duration,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            self._publish_data(data)
             if self.total_energy >= self.battery_capacity:
-                # complete
-                complete = {"type":"CHARGE_COMPLETE","cp_id": self.cp_id, "driver_id": self.current_driver, "energy": round(self.total_energy,3), "cost": round(self.total_cost,2)}
-                self.producer.send(TOPIC_CP_DATA, complete); self.producer.flush()
+                complete = {
+                    "type": "CHARGE_COMPLETE",
+                    "cp_id": self.cp_id,
+                    "driver_id": self.current_driver,
+                    "energy": round(self.total_energy, 3),
+                    "cost": round(self.total_cost, 2),
+                }
+                self._publish_data(complete)
                 self.stop_charging(send_complete=False)
                 break
             time.sleep(interval)
@@ -165,16 +262,31 @@ class Engine:
         self.is_paused = False
         self.is_charging = False
         if send_complete and self.current_driver:
-            stop_msg = {"type":"CHARGE_COMPLETE","cp_id": self.cp_id, "driver_id": self.current_driver, "energy": round(self.total_energy,3), "cost": round(self.total_cost,2), "cancelled": True, "reason": "stopped"}
-            self.producer.send(TOPIC_CP_DATA, stop_msg); self.producer.flush()
+            stop_msg = {
+                "type": "CHARGE_COMPLETE",
+                "cp_id": self.cp_id,
+                "driver_id": self.current_driver,
+                "energy": round(self.total_energy, 3),
+                "cost": round(self.total_cost, 2),
+                "cancelled": True,
+                "reason": "stopped",
+            }
+            self._publish_data(stop_msg)
         self.current_driver = None
 
     def cancel_charging(self):
         if self.is_charging:
             self.is_charging = False
             print(f"[{self.cp_id}] Charging cancelled by CENTRAL/Driver")
-            cancel = {"type":"CHARGE_COMPLETE","cp_id": self.cp_id, "driver_id": self.current_driver, "energy": round(self.total_energy,3), "cost": round(self.total_cost,2), "cancelled": True}
-            self.producer.send(TOPIC_CP_DATA, cancel); self.producer.flush()
+            cancel = {
+                "type": "CHARGE_COMPLETE",
+                "cp_id": self.cp_id,
+                "driver_id": self.current_driver,
+                "energy": round(self.total_energy, 3),
+                "cost": round(self.total_cost, 2),
+                "cancelled": True,
+            }
+            self._publish_data(cancel)
             self.current_driver = None
 
     def pause_charging(self):
@@ -202,6 +314,7 @@ class Engine:
             print("  7 - Mostrar estado")
             print("  q - Salir")
             print("=" * 60)
+
         print_menu()
         while not self._stop.is_set():
             try:
@@ -215,34 +328,40 @@ class Engine:
             if action == "1" or (action == "start" and len(parts) > 1):
                 driver = parts[1] if len(parts) > 1 else input("Driver ID: ").strip().upper()
                 self.start_charging(driver)
-            elif action in ("2","pause"):
+            elif action in ("2", "pause"):
                 self.pause_charging()
-            elif action in ("3","resume"):
+            elif action in ("3", "resume"):
                 self.resume_charging()
-            elif action in ("4","stop"):
+            elif action in ("4", "stop"):
                 self.stop_charging()
-            elif action in ("5","fault"):
+            elif action in ("5", "fault"):
                 self.is_faulty = True
                 print(f"[{self.cp_id}] Marcado como faulty")
-            elif action in ("6","repair"):
+            elif action in ("6", "repair"):
                 self.is_faulty = False
                 print(f"[{self.cp_id}] Marcado como ok")
-            elif action in ("7","status"):
-                print(f"[{self.cp_id}] estado -> charging={self.is_charging} paused={self.is_paused} faulty={self.is_faulty} driver={self.current_driver}")
-            elif action in ("q","quit","exit"):
+            elif action in ("7", "status"):
+                print(
+                    f"[{self.cp_id}] estado -> charging={self.is_charging} paused={self.is_paused} "
+                    f"faulty={self.is_faulty} driver={self.current_driver}"
+                )
+            elif action in ("q", "quit", "exit"):
                 self._stop.set()
                 break
             else:
                 print("Comando no reconocido.")
             print_menu()
 
+
 def main(cp_id):
     engine = Engine(cp_id)
     engine.start()
 
+
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) < 2:
-        print("Uso: python EV_CP_E_kafka.py <CP_ID>")
+        print("Uso: python EV_CP_E.py <CP_ID>")
         sys.exit(1)
     main(sys.argv[1])

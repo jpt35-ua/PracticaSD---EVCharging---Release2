@@ -99,6 +99,10 @@ a {
   background: rgba(148, 163, 184, 0.16);
   color: #cbd5e1;
 }
+.status-alert {
+  background: rgba(249, 115, 22, 0.2);
+  color: #fed7aa;
+}
 
 .btn {
   border: 1px solid rgba(62, 80, 122, 0.6);

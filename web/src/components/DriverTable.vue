@@ -34,12 +34,14 @@ defineProps({
 const statusClass = (state) => ({
   CONECTADO: 'badge status-ok',
   CARGANDO: 'badge status-charging',
+  ERROR: 'badge status-faulty',
   DESCONECTADO: 'badge status-disconnected',
 }[state] || 'badge status-disconnected');
 
 const stateLabel = (d) => {
   if (d.state === 'CARGANDO' && d.cp_id) return `Cargando (${d.cp_id})`;
   if (d.state === 'CONECTADO') return 'Conectado';
+  if (d.state === 'ERROR') return 'Error';
   if (d.state === 'DESCONECTADO') return 'Desconectado';
   return d.state || 'Desconocido';
 };

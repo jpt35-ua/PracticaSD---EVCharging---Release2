@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def main():
     parser = argparse.ArgumentParser(description='Sistema EVCharging - SD 25/26')
-    parser.add_argument('module', choices=['central', 'cp_engine', 'cp_monitor', 'driver'],
+    parser.add_argument('module', choices=['central', 'cp_engine', 'cp_monitor', 'driver', 'registry', 'weather'],
                         help='Módulo a ejecutar')
     parser.add_argument('--id', type=str, help='ID del módulo (requerido para cp_engine, cp_monitor y driver)')
     
@@ -48,6 +48,12 @@ def main():
             sys.exit(1)
         from Driver.EV_Driver import main as driver_main
         driver_main(args.id)
+    elif args.module == 'registry':
+        from Registry.EV_Registry import main as registry_main
+        registry_main()
+    elif args.module == 'weather':
+        from Weather.EV_W import main as weather_main
+        weather_main()
 
 
 if __name__ == '__main__':

@@ -83,6 +83,36 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  registry:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MODULE: registry
+    container_name: evcharging-registry
+    network_mode: host
+    environment:
+      MODULE: registry
+    volumes:
+      - ./config:/app/config
+      - ./Central/bdd:/app/Central/bdd
+    restart: unless-stopped
+
+  weather:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MODULE: weather
+    container_name: evcharging-weather
+    network_mode: host
+    environment:
+      MODULE: weather
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}
+    volumes:
+      - ./config:/app/config
+    restart: unless-stopped
+
 networks:
   evcharging-network:
     driver: bridge

@@ -25,6 +25,8 @@ help:
 	@echo "  make run-cp-engine CP_ID=CP01"
 	@echo "  make run-cp-monitor CP_ID=CP01"
 	@echo "  make run-driver DRIVER_ID=D01"
+	@echo "  make run-registry"
+	@echo "  make run-weather"
 	@echo "  make web-install           # instala dependencias web/"
 	@echo "  make web-dev               # levanta Vite (frontend)"
 	@echo "  make web-build             # build de producción frontend"
@@ -52,6 +54,14 @@ run-cp-monitor:
 run-driver:
 	@echo "[RUN] Driver $(DRIVER_ID)"
 	$(PYTHON) Driver/EV_Driver.py $(DRIVER_ID)
+
+run-registry:
+	@echo "[RUN] Registry"
+	$(PYTHON) Registry/EV_Registry.py
+
+run-weather:
+	@echo "[RUN] Weather Office"
+	$(PYTHON) Weather/EV_W.py
 
 # -----------------------------------------------------------
 # FRONTEND (opcional)

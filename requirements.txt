@@ -12,3 +12,9 @@ python-dotenv==1.0.0
 # API opcional para dashboard web
 fastapi==0.115.5
 uvicorn==0.30.6
+
+# Seguridad (cifrado simétrico, PBKDF2, etc.)
+cryptography==43.0.1
+
+# HTTP clients para Registry / Weather / etc.
+requests==2.32.3

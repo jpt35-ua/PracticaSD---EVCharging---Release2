@@ -35,6 +35,8 @@
       <SessionsTable :sessions="sessions" />
     </div>
 
+    <EventLog :events="events" style="margin-top:12px;" />
+
     <div v-if="error" class="card" style="margin-top:12px;color:#fca5a5;border-color:#ef4444;">
       {{ error }}
     </div>
@@ -54,12 +56,14 @@ import DriverTable from './components/DriverTable.vue';
 import SessionsTable from './components/SessionsTable.vue';
 import AssignCard from './components/AssignCard.vue';
 import SessionList from './components/SessionList.vue';
+import EventLog from './components/EventLog.vue';
 
 const store = useDashboardStore();
 const cps = computed(() => store.cps);
 const drivers = computed(() => store.drivers);
 const sessions = computed(() => store.sessions);
 const activeSessions = computed(() => store.activeSessions);
+const events = computed(() => store.events);
 const error = computed(() => store.error);
 const message = computed(() => store.message);
 const apiStatus = computed(() => store.apiStatus);

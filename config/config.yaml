@@ -16,3 +16,23 @@ simulation:
   charge_interval: 1
   charge_duration: 120
 message_codes: {}
+registry:
+  host: "0.0.0.0"
+  port: 8443
+  base_url: "https://localhost:8443"
+  cert_file: "config/certs/registry_cert.pem"
+  key_file: "config/certs/registry_key.pem"
+  token_ttl: 180
+central_api:
+  host: "0.0.0.0"
+  port: 8000
+  base_url: "http://localhost:8000"
+security:
+  credentials_dir: "config/credentials"
+weather:
+  polling_interval: 4
+  threshold_celsius: 0
+  openweather_api_key: ""
+  default_cities:
+    CP01: "Valencia,ES"
+    CP02: "Madrid,ES"

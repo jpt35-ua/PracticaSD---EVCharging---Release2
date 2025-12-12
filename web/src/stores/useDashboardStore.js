@@ -7,6 +7,7 @@ export const useDashboardStore = defineStore('dashboard', {
     drivers: [],
     sessions: [],
     activeSessions: [],
+    events: [],
     loading: false,
     error: null,
     message: null,
@@ -24,6 +25,7 @@ export const useDashboardStore = defineStore('dashboard', {
         this.drivers = data.drivers || [];
         this.sessions = data.sessions || [];
         this.activeSessions = data.active_sessions || [];
+        this.events = data.events || [];
         this.apiStatus = 'ok';
       } catch (err) {
         this.error = err.message || 'Error cargando snapshot';
