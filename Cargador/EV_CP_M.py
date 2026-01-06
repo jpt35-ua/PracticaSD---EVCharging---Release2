@@ -13,6 +13,7 @@ from datetime import datetime
 
 import requests
 import yaml
+from urllib.parse import urlparse
 from kafka import KafkaConsumer, KafkaProducer
 from kafka.errors import KafkaError, NoBrokersAvailable
 
@@ -45,6 +46,10 @@ REGISTRY_VERIFY = (
 )
 if REGISTRY_VERIFY and not os.path.exists(REGISTRY_VERIFY):
     REGISTRY_VERIFY = True
+
+parsed_registry = urlparse(REGISTRY_BASE)
+if parsed_registry.hostname in ("localhost", "127.0.0.1"):
+    REGISTRY_VERIFY = False
 
 
 class Monitor:
@@ -216,7 +221,6 @@ class Monitor:
             data = resp.json()
             self.credentials = self.cred_store.update(
                 self.cp_id,
-                cp_id=self.cp_id,
                 location=data.get("location"),
                 client_secret=data.get("client_secret"),
                 metadata=data.get("metadata"),
