@@ -32,7 +32,7 @@ security:
 weather:
   polling_interval: 4
   threshold_celsius: 0
-  openweather_api_key: ""
+  openweather_api_key: "e5ab88092bb015fd5e95282f5a15cee8"
   default_cities:
     CP01: "Valencia,ES"
     CP02: "Madrid,ES"
