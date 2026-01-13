@@ -44,6 +44,7 @@ weather:
 
 ## 4. API REST expuesta por la Central
 
+
 | Endpoint | Método | Descripción |
 |----------|--------|-------------|
 | `/snapshot` | GET | Snapshot completo `cps`, `drivers`, `sessions`, `active_sessions`, `events`. |
