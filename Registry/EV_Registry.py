@@ -235,6 +235,17 @@ def list_cps():
         )
     return {"items": data}
 
+def reset_registry_state():
+    with db_lock:
+        conn.execute(
+            "UPDATE cp_registry SET registered=0, active=0, last_auth_ts=NULL, "
+            "last_token=NULL, last_token_hash=NULL, last_token_salt=NULL, last_token_issued_at=NULL"
+        )
+        conn.execute(
+            "UPDATE charging_points SET registry_state='PENDIENTE', auth_state='NO_AUTENTICADO'"
+        )
+        conn.commit()
+
 
 def main():
     host = REGISTRY_CFG.get("host", "0.0.0.0")
@@ -242,6 +253,7 @@ def main():
     cert = REGISTRY_CFG.get("cert_file")
     key = REGISTRY_CFG.get("key_file")
     disable_tls = os.getenv("REGISTRY_DISABLE_TLS", "0") == "1"
+    reset_registry_state()
     uvicorn_kwargs = {"host": host, "port": port}
     if not disable_tls and cert and key:
         cert_path = os.path.join(ROOT_DIR, cert) if not os.path.isabs(cert) else cert

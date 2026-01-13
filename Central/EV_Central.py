@@ -90,6 +90,7 @@ ACTIVE_SESSIONS: Dict[tuple, int] = {}
 drivers_state: Dict[str, Dict[str, Any]] = {}
 STALE_THRESHOLD = 15
 DRIVER_STALE = 300
+REGISTRY_REFRESH_INTERVAL = 5
 
 
 def now_ts() -> str:
@@ -112,10 +113,6 @@ def load_initial_state():
                 "auth_state": row["auth_state"],
             }
         for row in conn.execute(
-            "SELECT cp_id, symmetric_key FROM cp_security_keys WHERE active=1"
-        ):
-            CP_KEYS[row["cp_id"]] = row["symmetric_key"]
-        for row in conn.execute(
             "SELECT cp_id, city, temperature, updated_at FROM weather_alerts WHERE active=1"
         ):
             WEATHER_ALERTS[row["cp_id"]] = {
@@ -123,6 +120,11 @@ def load_initial_state():
                 "temperature": row["temperature"],
                 "updated_at": row["updated_at"],
             }
+    # Por defecto, forzamos reautenticación en cada despliegue.
+    CP_KEYS.clear()
+    for cp_id, entry in CP_STATE.items():
+        entry["auth_state"] = "NO_AUTENTICADO"
+        update_charging_point(cp_id, status=entry.get("status", "unknown"))
     print(f"[CENTRAL] Estado inicial: {len(CP_STATE)} CPs, {len(CP_KEYS)} claves activas.")
 
 
@@ -185,19 +187,47 @@ def update_charging_point(cp_id: str, **kwargs):
 
 
 def refresh_registry_snapshot():
+    registry_ids = set()
     with db_lock:
         for row in conn.execute(
             "SELECT cp_id, location, registered, active FROM cp_registry"
         ):
-            entry = ensure_cp_entry(row["cp_id"])
-            entry["registry_state"] = "REGISTRADO" if row["registered"] else "BAJA"
+            cp_id = row["cp_id"]
+            registry_ids.add(cp_id)
+            entry = ensure_cp_entry(cp_id)
+            if row["registered"]:
+                entry["registry_state"] = "REGISTRADO"
+            else:
+                entry["registry_state"] = "BAJA"
+                entry["auth_state"] = "NO_AUTENTICADO"
+                CP_KEYS.pop(cp_id, None)
             entry["location"] = row["location"]
+    # Los CPs que no estén en el registry deben quedar como pendientes y sin clave.
+    for cp_id, entry in CP_STATE.items():
+        if cp_id in registry_ids:
+            continue
+        entry["registry_state"] = "PENDIENTE"
+        entry["auth_state"] = "NO_AUTENTICADO"
+        CP_KEYS.pop(cp_id, None)
+        update_charging_point(cp_id, status=entry.get("status", "unknown"))
+
+
+def registry_refresh_loop():
+    while True:
+        try:
+            refresh_registry_snapshot()
+        except Exception:
+            pass
+        time.sleep(REGISTRY_REFRESH_INTERVAL)
 
 
 def mark_cp_seen(cp_id: str, status: str):
     entry = ensure_cp_entry(cp_id)
     entry["last_seen"] = time.time()
     entry["status"] = status
+    if not cp_is_registered(cp_id):
+        entry["registry_state"] = "PENDIENTE"
+        entry["auth_state"] = "NO_AUTENTICADO"
     update_charging_point(cp_id, status=status)
 
 
@@ -810,9 +840,11 @@ def main():
     t1 = threading.Thread(target=handle_driver_messages, daemon=True)
     t2 = threading.Thread(target=handle_cp_messages, daemon=True)
     t3 = threading.Thread(target=admin_console, daemon=True)
+    t4 = threading.Thread(target=registry_refresh_loop, daemon=True)
     t1.start()
     t2.start()
     t3.start()
+    t4.start()
     start_api()
     print("[CENTRAL] EV_Central running. Ctrl+C para salir.")
     try:
