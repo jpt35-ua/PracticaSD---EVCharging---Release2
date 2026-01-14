@@ -33,6 +33,7 @@ class WeatherOffice:
         self.locations = self.load_locations(weather_cfg.get("default_cities", {}))
         self.alerts_active = {}
         self.last_temperatures = {}
+        self.manual_temps = {}
         self._stop = threading.Event()
         self.session = requests.Session()
 
@@ -57,12 +58,20 @@ class WeatherOffice:
                 time.sleep(self.poll_interval)
                 continue
             for cp_id, city in list(self.locations.items()):
-                temp = self.fetch_temperature(city)
+                temp = self.get_temperature(cp_id, city)
                 if temp is None:
                     continue
                 self.last_temperatures[cp_id] = {"city": city, "temperature": temp, "timestamp": datetime.utcnow().isoformat()}
-                self.evaluate_temperature(cp_id, city, temp)
+                self.evaluate_temperature(cp_id, city, temp, provider=self.get_provider(cp_id))
             time.sleep(self.poll_interval)
+
+    def get_temperature(self, cp_id: str, city: str):
+        if cp_id in self.manual_temps:
+            return self.manual_temps[cp_id]
+        return self.fetch_temperature(city)
+
+    def get_provider(self, cp_id: str):
+        return "manual" if cp_id in self.manual_temps else "openweather"
 
     def fetch_temperature(self, city: str):
         try:
@@ -75,24 +84,24 @@ class WeatherOffice:
             print(f"[EV_W] Error consultando clima para {city}: {exc}")
             return None
 
-    def evaluate_temperature(self, cp_id: str, city: str, temperature: float):
+    def evaluate_temperature(self, cp_id: str, city: str, temperature: float, provider: str = "openweather"):
         below = temperature <= self.threshold
         active = self.alerts_active.get(cp_id, False)
         if below and not active:
-            self.send_alert(cp_id, city, temperature, "alert")
+            self.send_alert(cp_id, city, temperature, "alert", provider)
             self.alerts_active[cp_id] = True
         elif not below and active:
-            self.send_alert(cp_id, city, temperature, "clear")
+            self.send_alert(cp_id, city, temperature, "clear", provider)
             self.alerts_active.pop(cp_id, None)
 
-    def send_alert(self, cp_id: str, city: str, temperature: float, status: str):
+    def send_alert(self, cp_id: str, city: str, temperature: float, status: str, provider: str = "openweather"):
         payload = {
             "cp_id": cp_id,
             "city": city,
             "temperature": temperature,
             "status": status,
             "source": "ev_w",
-            "provider": "openweather",
+            "provider": provider,
         }
         try:
             resp = self.session.post(f"{self.central_base}/weather/alert", json=payload, timeout=8)
@@ -138,11 +147,11 @@ class WeatherOffice:
             print("Sin localizaciones.")
             return
         for cp_id, city in self.locations.items():
-            temp = self.fetch_temperature(city)
+            temp = self.get_temperature(cp_id, city)
             if temp is None:
                 continue
             self.last_temperatures[cp_id] = {"city": city, "temperature": temp, "timestamp": datetime.utcnow().isoformat()}
-            self.evaluate_temperature(cp_id, city, temp)
+            self.evaluate_temperature(cp_id, city, temp, provider=self.get_provider(cp_id))
 
     def set_threshold(self):
         try:
@@ -154,6 +163,37 @@ class WeatherOffice:
         except ValueError:
             print("Valor no válido.")
 
+    def set_manual_temperature(self):
+        cp_id = input("CP_ID: ").strip().upper()
+        if cp_id not in self.locations:
+            print("CP no encontrado en localizaciones.")
+            return
+        try:
+            value = float(input("Temperatura manual (°C): ").strip())
+        except ValueError:
+            print("Valor no válido.")
+            return
+        self.manual_temps[cp_id] = value
+        city = self.locations[cp_id]
+        self.last_temperatures[cp_id] = {"city": city, "temperature": value, "timestamp": datetime.utcnow().isoformat()}
+        self.evaluate_temperature(cp_id, city, value, provider="manual")
+        print(f"[EV_W] Temperatura manual aplicada a {cp_id} ({city}) -> {value}°C")
+
+    def clear_manual_temperature(self):
+        cp_id = input("CP_ID: ").strip().upper()
+        if cp_id not in self.manual_temps:
+            print("No hay temperatura manual para ese CP.")
+            return
+        self.manual_temps.pop(cp_id, None)
+        print(f"[EV_W] Temperatura manual desactivada para {cp_id}.")
+        city = self.locations.get(cp_id)
+        if city:
+            temp = self.fetch_temperature(city)
+            if temp is None:
+                return
+            self.last_temperatures[cp_id] = {"city": city, "temperature": temp, "timestamp": datetime.utcnow().isoformat()}
+            self.evaluate_temperature(cp_id, city, temp, provider="openweather")
+
     def menu_loop(self):
         print("EV_W Weather Control listo. Ctrl+C para salir.")
         while True:
@@ -163,6 +203,8 @@ class WeatherOffice:
             print("3 - Eliminar CP")
             print("4 - Consultar clima ahora")
             print("5 - Cambiar umbral de temperatura")
+            print("6 - Forzar temperatura manual de un CP")
+            print("7 - Volver a temperatura real de un CP")
             print("q - Salir")
             try:
                 cmd = input("Opción: ").strip().lower()
@@ -178,6 +220,10 @@ class WeatherOffice:
                 self.check_now()
             elif cmd == "5":
                 self.set_threshold()
+            elif cmd == "6":
+                self.set_manual_temperature()
+            elif cmd == "7":
+                self.clear_manual_temperature()
             elif cmd == "q":
                 self._stop.set()
                 break
