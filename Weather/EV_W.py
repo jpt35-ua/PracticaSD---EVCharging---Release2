@@ -149,6 +149,8 @@ class WeatherOffice:
             value = float(input(f"Nueva temperatura umbral (actual {self.threshold}°C): "))
             self.threshold = value
             print(f"Umbral actualizado a {value}°C.")
+            # Re-evaluar al instante para sincronizar alertas con Central.
+            self.check_now()
         except ValueError:
             print("Valor no válido.")
 
