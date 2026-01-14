@@ -89,7 +89,7 @@ run-cps:
 		ID=$$(printf "CP%02d" $$i); \
 		echo " - Lanzando $$ID"; \
 		gnome-terminal --title="Engine $$ID" -- bash -c "make run-cp-engine CP_ID=$$ID; exec bash" & \
-		gnome-terminal --title="Monitor $$ID" -- bash -c "make run-cp-monitor CP_ID=$$ID; exec bash" & \
+		gnome-terminal --title="Monitor $$ID" -- bash -c "CP_INSECURE_REGISTRY=1 make run-cp-monitor CP_ID=$$ID; exec bash" & \
 	done
 
 run-drivers:
