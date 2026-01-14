@@ -72,12 +72,12 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+      args:
+        # Usa la IP del host para que el frontend apunte a la Central desde otros equipos.
+        VITE_API_URL: http://${HOST_IP:-localhost}:8000
     container_name: evcharging-web
     ports:
       - "4173:80"
-    environment:
-      # Ajusta a la URL del API de la central (cuando se exponga).
-      - VITE_API_URL=http://localhost:8000
     depends_on:
       kafka:
         condition: service_healthy
