@@ -36,8 +36,8 @@ weather:
   default_cities:
     CP01: "Valencia,ES"
     CP02: "Madrid,ES"
-    CP03: "Barcelona,ES"
-    CP04: "Alicante,ES"
+    CP03: "Alicante,ES"
+    CP04: "Barcelona,ES"
     CP05: "Sevilla,ES"
     CP06: "Bilbao,ES"
     CP07: "Granada,ES"
