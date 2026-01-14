@@ -14,7 +14,7 @@ cps:
     heartbeat_interval: 5
 simulation:
   charge_interval: 1
-  charge_duration: 120
+  charge_duration: 480
 message_codes: {}
 registry:
   host: "0.0.0.0"
@@ -36,3 +36,8 @@ weather:
   default_cities:
     CP01: "Valencia,ES"
     CP02: "Madrid,ES"
+    CP03: "Barcelona,ES"
+    CP04: "Alicante,ES"
+    CP05: "Sevilla,ES"
+    CP06: "Bilbao,ES"
+    CP07: "Granada,ES"
